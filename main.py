@@ -1,0 +1,110 @@
+import time
+import gpiod
+import requests
+import pygame.mixer
+import time
+
+
+# Configuration
+CHIP = 1  # Using gpiochip1
+
+# Configuration based on chosen pins
+DOOR_PIN = 91   # 8
+BUZZER_PIN = 92 # 10
+ARMED_PIN = 93  # 16
+
+# Webhook
+WEBHOOK_URL = "" # At the moment it is using a DISCORD webhook. (Plan is it make it interact with discord or a custom webpage to arm and disarm) (NO PASSCODE/KEYPAD PLANS)
+
+pygame.mixer.init()
+
+# Initialize chip and lines
+chip = gpiod.Chip('gpiochip{}'.format(CHIP))
+door_line = chip.get_line(DOOR_PIN)
+buzzer_line = chip.get_line(BUZZER_PIN)
+armed_line = chip.get_line(ARMED_PIN)
+
+# Explicitly set the direction
+door_line.request(consumer='door_sensor', type=gpiod.LINE_REQ_DIR_IN)
+armed_line.request(consumer='armed_sensor', type=gpiod.LINE_REQ_DIR_IN)
+buzzer_line.request(consumer='buzzer', type=gpiod.LINE_REQ_DIR_OUT)
+
+def buzzer_toggle():
+    buzzer_line.set_value(1)
+    time.sleep(0.1)
+    buzzer_line.set_value(0)
+    time.sleep(0.1)
+
+def playsound(file_name):
+    sound = pygame.mixer.Sound(file_name)
+    sound.play()
+    return sound
+
+
+def playzone(number, status):
+    sound = playsound('zone.wav')
+    time.sleep(sound.get_length())
+    sound = playsound(str(number) + '.wav')
+    time.sleep(sound.get_length())
+    sound = playsound(str(status) + '.wav')
+    time.sleep(sound.get_length())
+
+
+alert_sent = False
+alarm_triggered_time = None
+unsecured_played = False
+
+door_state = door_line.get_value()
+armed_state = armed_line.get_value()
+
+lockout = False
+
+unsecured_state = False
+
+
+while True:
+    if door_state != door_line.get_value():
+        print(f"Door state changed to: {'OPEN' if door_state else 'CLOSED'}")
+        door_state = door_line.get_value()
+
+    if armed_state != armed_line.get_value():
+        print(f"Alarm state changed to: {'DISARMED' if armed_state else 'ARMED'}")
+        armed_state = armed_line.get_value()
+        lockout = False
+        unsecured_played = False
+        if armed_state:
+            playsound("armed.wav")
+        else:
+            playsound("disarmed.wav")
+
+
+        if not armed_state:  # if system is disarmed
+            alert_sent = False
+            alarm_triggered_time = None
+            buzzer_line.set_value(0)
+
+    if door_state and armed_state and not lockout:
+        lockout = True
+    else:
+        buzzer_line.set_value(0)
+        unsecured_state = False
+        
+
+    if lockout:
+        print("ALERT: Door opened while armed!")
+        if not alert_sent:
+            requests.post(WEBHOOK_URL, json={"content": "ALERT: Door opened while armed!"})
+            playzone(1, "secured")
+            alert_sent = True
+            alarm_triggered_time = time.time()
+
+        if alarm_triggered_time and time.time() - alarm_triggered_time > 20:
+            buzzer_line.set_value(1)
+            if not unsecured_state and not unsecured_played:  # Add the check for unsecured_played
+                playzone(1, "unsecured")
+                unsecured_state = True
+                unsecured_played = True  # Set the flag after playing the sound
+        else:
+            buzzer_toggle()
+
+    time.sleep(0.1)
