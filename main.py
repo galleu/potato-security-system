@@ -3,6 +3,8 @@ import gpiod
 import requests
 import pygame.mixer
 import time
+import subprocess
+import threading
 
 
 # Configuration
@@ -24,6 +26,10 @@ door_line = chip.get_line(DOOR_PIN)
 buzzer_line = chip.get_line(BUZZER_PIN)
 armed_line = chip.get_line(ARMED_PIN)
 
+
+# Set the system volume
+subprocess.run("amixer -c 1 set PCM 100%", shell=True, text=True)
+
 # Explicitly set the direction
 door_line.request(consumer='door_sensor', type=gpiod.LINE_REQ_DIR_IN)
 armed_line.request(consumer='armed_sensor', type=gpiod.LINE_REQ_DIR_IN)
@@ -36,17 +42,26 @@ def buzzer_toggle():
     time.sleep(0.1)
 
 def playsound(file_name):
-    sound = pygame.mixer.Sound(file_name)
+    sound = pygame.mixer.Sound(f'voice/{str(file_name)}.wav')
     sound.play()
     return sound
 
+def playwords(words):
+    for word in words:
+        sound = playsound(word)
+        time.sleep(sound.get_length())
+
+def playwords_threaded(words):
+    t = threading.Thread(target=playwords, args=(words,))
+    t.start()
+
 
 def playzone(number, status):
-    sound = playsound('zone.wav')
+    sound = playsound('zone')
     time.sleep(sound.get_length())
-    sound = playsound(str(number) + '.wav')
+    sound = playsound(number)
     time.sleep(sound.get_length())
-    sound = playsound(str(status) + '.wav')
+    sound = playsound(status)
     time.sleep(sound.get_length())
 
 
@@ -61,11 +76,16 @@ lockout = False
 
 unsecured_state = False
 
+# Buzzer and speaker on 
+buzzer_toggle()
+playwords_threaded(['system', 'on'])
+
 
 while True:
     if door_state != door_line.get_value():
         print(f"Door state changed to: {'OPEN' if door_state else 'CLOSED'}")
         door_state = door_line.get_value()
+        playwords_threaded(['zone', '1', 'open' if door_state else 'close'])
 
     if armed_state != armed_line.get_value():
         print(f"Alarm state changed to: {'DISARMED' if armed_state else 'ARMED'}")
@@ -73,9 +93,9 @@ while True:
         lockout = False
         unsecured_played = False
         if armed_state:
-            playsound("armed.wav")
+            playsound("armed")
         else:
-            playsound("disarmed.wav")
+            playsound("disarmed")
 
 
         if not armed_state:  # if system is disarmed
@@ -94,7 +114,7 @@ while True:
         print("ALERT: Door opened while armed!")
         if not alert_sent:
             requests.post(WEBHOOK_URL, json={"content": "ALERT: Door opened while armed!"})
-            playzone(1, "secured")
+            playwords_threaded(['alert','system', 'armed'])
             alert_sent = True
             alarm_triggered_time = time.time()
 
@@ -107,4 +127,8 @@ while True:
         else:
             buzzer_toggle()
 
+
+
     time.sleep(0.1)
+
+
